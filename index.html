@@ -1,5 +1,7 @@
 <!DOCTYPE html>
 <html>
+ <link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#02040a">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -13,6 +15,12 @@ video{opacity:0}
 button{position:fixed;bottom:25px;left:50%;transform:translateX(-50%);width:85px;height:85px;border-radius:50%;border:0;background:#8de7ff}
 </style>
 </head>
+ <script>
+if ("serviceWorker" in navigator) {
+ navigator.serviceWorker.register("service-worker.js");
+}
+ </script>
+ 
 <body>
 
 <video id="cam" autoplay playsinline></video>
