@@ -369,20 +369,51 @@
     video.srcObject = stream;
     track = stream.getVideoTracks()[0];
 
+    // Helper: race any promise against a timeout so a single flaky device
+    // API call can never hang the app forever on the boot screen.
+    function withTimeout(promise, ms){
+      return Promise.race([
+        Promise.resolve(promise),
+        new Promise(res=>setTimeout(res, ms))
+      ]);
+    }
+
     // Try to hand exposure/focus/white-balance control to the device's
     // continuous auto modes — we never expose manual controls to the user,
-    // the app always decides.
+    // the app always decides. Some Android camera drivers let this promise
+    // hang indefinitely, so it's time-boxed rather than fully awaited.
     try{
       const caps = track.getCapabilities ? track.getCapabilities() : {};
       const adv = [];
       if(caps.focusMode && caps.focusMode.includes('continuous')) adv.push({focusMode:'continuous'});
       if(caps.exposureMode && caps.exposureMode.includes('continuous')) adv.push({exposureMode:'continuous'});
       if(caps.whiteBalanceMode && caps.whiteBalanceMode.includes('continuous')) adv.push({whiteBalanceMode:'continuous'});
-      if(adv.length) await track.applyConstraints({advanced:adv});
+      if(adv.length) await withTimeout(track.applyConstraints({advanced:adv}), 1200);
     }catch(e){ /* not all devices expose this — software enhancement covers the gap */ }
 
-    await new Promise(res=>{ video.onloadedmetadata = ()=>{ video.play(); res(); }; });
+    bootMsg.textContent = 'Starting preview…';
+    await withTimeout(new Promise(res=>{
+      video.onloadedmetadata = ()=>{ video.play().catch(()=>{}); res(); };
+    }), 6000);
+
+    // Belt-and-suspenders: even if the metadata event never fired (some
+    // devices miss it), videoWidth/videoHeight may already be populated —
+    // poll briefly before giving up.
     videoW = video.videoWidth; videoH = video.videoHeight;
+    if(!videoW || !videoH){
+      video.play().catch(()=>{});
+      for(let i=0; i<20 && (!video.videoWidth || !video.videoHeight); i++){
+        await new Promise(r=>setTimeout(r,150));
+      }
+      videoW = video.videoWidth; videoH = video.videoHeight;
+    }
+    if(!videoW || !videoH){
+      showPermError(
+        'Camera connected but no picture',
+        'Permission was granted and a camera stream was created, but no video frames ever arrived. This is usually a one-off glitch \u2014 fully close this browser tab (not just refresh) and reopen the link. If it keeps happening, another app may be holding the camera open in the background.'
+      );
+      return;
+    }
     resizeCanvas();
     boot.style.display='none';
     requestAnimationFrame(renderLoop);
