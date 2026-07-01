@@ -737,9 +737,13 @@
       out.data[p+3] = 255;
     }
 
-    // contrast stretch (recover faint detail) + unsharp mask (detail/sharpness)
-    stretchContrast(out, MODES[currentMode]);
-    const sharpened = unsharpMask(out, outW, outH, currentMode==='MOON'?0.9:0.7);
+    // Tone-map + gently sharpen the stacked result. This replaced an
+    // earlier hard min/max contrast stretch that clipped smooth gradients
+    // (e.g. moonlight diffused through cloud) into stark black/white
+    // shapes with hard edges — fine for isolated stars on a black sky, but
+    // destructive on any scene with continuous brightness gradients.
+    toneMap(out, currentMode);
+    const sharpened = unsharpMask(out, outW, outH, currentMode==='MOON'?0.55:0.45, 4);
 
     resultCanvas.width = outW; resultCanvas.height = outH;
     resultCanvas.getContext('2d').putImageData(sharpened, 0, 0);
@@ -750,32 +754,57 @@
     resultWrap.classList.add('show');
   }
 
-  function stretchContrast(imgData, modeInfo){
+  // Percentile-based tone curve: instead of stretching to the frame's true
+  // min/max (which lets a single bright blob like a diffused moon force
+  // everything else to clip to pure white/black), this clips only the
+  // extreme ~1% of pixels on each end and applies a soft gamma lift in
+  // between — preserving cloud texture and gradient instead of turning it
+  // into a flat, hard-edged shape.
+  function toneMap(imgData, mode){
     const d = imgData.data;
-    let min=255, max=0;
+    const n = d.length/4;
+    const hist = new Uint32Array(256);
     for(let i=0;i<d.length;i+=4){
       const l = 0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
-      if(l<min) min=l; if(l>max) max=l;
+      hist[l|0]++;
     }
-    const range = Math.max(1, max-min);
-    const boost = currentMode==='MOON' ? 1.0 : 1.25; // don't over-blow a bright moon
+    const lowTarget = n*0.010, highTarget = n*0.995;
+    let cum=0, lo=0, hi=255;
+    for(let v=0; v<256; v++){ cum+=hist[v]; if(cum>=lowTarget){ lo=v; break; } }
+    cum=0;
+    for(let v=255; v>=0; v--){ cum+=hist[v]; if(cum>=(n-highTarget)){ hi=v; break; } }
+    if(hi-lo < 40){ hi = Math.min(255, lo+40); } // guard against an already-flat frame over-amplifying noise
+    const range = Math.max(1, hi-lo);
+
+    // gentle shadow lift, mode-tuned: star/galaxy modes want faint detail
+    // pulled up a bit more; moon mode wants to stay mostly true-to-source
+    // since it's already bright and detail lives in the mid/highlights.
+    const gamma = mode==='MOON' ? 0.96 : (mode==='STAR' || mode==='GALAXY' ? 0.82 : 0.90);
+
     for(let i=0;i<d.length;i+=4){
       for(let c=0;c<3;c++){
-        let v = (d[i+c]-min)/range*255*boost;
-        d[i+c] = v<0?0:(v>255?255:v);
+        let t = (d[i+c]-lo)/range;
+        t = t<0?0:(t>1?1:t);
+        t = Math.pow(t, gamma);
+        d[i+c] = t*255;
       }
     }
   }
 
-  // simple 3x3 unsharp mask: result = original + amount*(original - blurred)
-  function unsharpMask(imgData, w, h, amount){
+  // simple 3x3 unsharp mask: result = original + amount*(original - blurred),
+  // gated by a threshold so it only sharpens real edges (stars, moon
+  // terminator, tree/roof silhouettes) and leaves smooth sky/cloud
+  // gradients alone instead of amplifying them into hard ringing edges.
+  function unsharpMask(imgData, w, h, amount, threshold){
+    threshold = threshold || 0;
     const src = imgData.data;
     const blurred = boxBlur3(src, w, h);
     const out = new Uint8ClampedArray(src.length);
     for(let i=0;i<src.length;i+=4){
       for(let c=0;c<3;c++){
         const orig = src[i+c], bl = blurred[i+c];
-        let v = orig + amount*(orig-bl);
+        const diff = orig-bl;
+        let v = Math.abs(diff) > threshold ? orig + amount*diff : orig;
         out[i+c] = v<0?0:(v>255?255:v);
       }
       out[i+3]=255;
