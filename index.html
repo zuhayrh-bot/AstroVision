@@ -7,73 +7,144 @@
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#02040a">
 <style>
-body{margin:0;background:#000;color:#fff;font-family:Arial;overflow:hidden}
+html,body{margin:0;background:#000;color:white;overflow:hidden;font-family:Arial}
 video,canvas{position:fixed;width:100%;height:100%;object-fit:cover}
 video{opacity:0}
-#ui{position:fixed;top:15px;left:15px;z-index:5}
-.box{background:#000b;padding:12px;border-radius:12px;color:#8de7ff}
-button{position:fixed;bottom:25px;left:50%;transform:translateX(-50%);width:80px;height:80px;border-radius:50%;border:0;background:#8de7ff}
+#ui{position:fixed;z-index:5;top:15px;left:15px}
+.box{background:#000c;padding:12px;border-radius:15px;color:#8de7ff}
+button{position:fixed;bottom:25px;left:50%;transform:translateX(-50%);width:80px;height:80px;border-radius:50%;background:#8de7ff;border:0}
 </style>
 </head>
 <body>
+
 <video id="cam" autoplay playsinline></video>
-<canvas id="view"></canvas>
+<canvas id="screen"></canvas>
+
 <div id="ui"><div class="box" id="status">Starting...</div></div>
+
 <button id="capture"></button>
 
 <script>
-if("serviceWorker" in navigator){navigator.serviceWorker.register("service-worker.js");}
-const cam=document.getElementById("cam"), canvas=document.getElementById("view"), ctx=canvas.getContext("2d",{willReadFrequently:true}), status=document.getElementById("status");
-let W,H;
+if("serviceWorker" in navigator){
+ navigator.serviceWorker.register("service-worker.js");
+}
+
+const cam=document.getElementById("cam");
+const screen=document.getElementById("screen");
+const ctx=screen.getContext("2d",{willReadFrequently:true});
+const status=document.getElementById("status");
+
+const grab=document.createElement("canvas");
+const gctx=grab.getContext("2d",{willReadFrequently:true});
+
+let W,H,running=true;
 
 async function start(){
- const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:1920},height:{ideal:1080}}});
+ const stream=await navigator.mediaDevices.getUserMedia({
+  video:{
+   facingMode:"environment",
+   width:{ideal:1280},
+   height:{ideal:720}
+  }
+ });
+
  cam.srcObject=stream;
+
  await new Promise(r=>cam.onloadedmetadata=r);
  await cam.play();
- W=cam.videoWidth;H=cam.videoHeight;
- canvas.width=W;canvas.height=H;
+
+ W=cam.videoWidth;
+ H=cam.videoHeight;
+
+ screen.width=W;
+ screen.height=H;
+
+ grab.width=640;
+ grab.height=360;
+
  status.textContent="AstroVision ready";
- preview();
+
+ draw();
 }
-function preview(){ctx.drawImage(cam,0,0,W,H);requestAnimationFrame(preview)}
+
+function draw(){
+ if(running){
+  ctx.drawImage(cam,0,0,W,H);
+ }
+ requestAnimationFrame(draw);
+}
 
 function enhance(img){
  let d=img.data;
+
  for(let i=0;i<d.length;i+=4){
   for(let c=0;c<3;c++){
    let v=d[i+c]/255;
    d[i+c]=Math.min(255,Math.pow(v,.65)*255*1.15);
   }
  }
+
  return img;
 }
 
 async function capture(){
- let frames=[],count=40;
- for(let i=0;i<count;i++){
-  status.textContent="Capturing "+(i+1)+"/"+count;
-  let t=document.createElement("canvas");
-  t.width=W/2;t.height=H/2;
-  let tc=t.getContext("2d");
-  tc.drawImage(cam,0,0,t.width,t.height);
-  frames.push(tc.getImageData(0,0,t.width,t.height));
-  await new Promise(r=>setTimeout(r,50));
+
+ running=false;
+
+ let frames=[];
+ let total=30;
+
+ for(let i=0;i<total;i++){
+
+  status.textContent="Capturing "+(i+1)+"/"+total;
+
+  gctx.drawImage(cam,0,0,grab.width,grab.height);
+
+  frames.push(
+   gctx.getImageData(0,0,grab.width,grab.height)
+  );
+
+  await new Promise(r=>setTimeout(r,60));
  }
- status.textContent="Stacking...";
- let w=frames[0].width,h=frames[0].height,out=ctx.createImageData(w,h);
+
+ status.textContent="Processing...";
+
+ let out=gctx.createImageData(grab.width,grab.height);
+
  for(let i=0;i<out.data.length;i+=4){
+
   let r=0,g=0,b=0;
-  frames.forEach(f=>{r+=f.data[i];g+=f.data[i+1];b+=f.data[i+2]});
-  out.data[i]=r/count;out.data[i+1]=g/count;out.data[i+2]=b/count;out.data[i+3]=255;
+
+  for(let f of frames){
+   r+=f.data[i];
+   g+=f.data[i+1];
+   b+=f.data[i+2];
+  }
+
+  out.data[i]=r/total;
+  out.data[i+1]=g/total;
+  out.data[i+2]=b/total;
+  out.data[i+3]=255;
  }
+
  enhance(out);
- let c=document.createElement("canvas");c.width=w;c.height=h;c.getContext("2d").putImageData(out,0,0);
- ctx.drawImage(c,0,0,W,H);
- status.textContent="Done - 40 frames stacked";
+
+ gctx.putImageData(out,0,0);
+
+ ctx.drawImage(
+  grab,
+  0,0,W,H
+ );
+
+ status.textContent="Done - stacked 30 frames";
+
+ running=true;
 }
+
 document.getElementById("capture").onclick=capture;
+
 start();
 </script>
+
 </body>
 </html>
